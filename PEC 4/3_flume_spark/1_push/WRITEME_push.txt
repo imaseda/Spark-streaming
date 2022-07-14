@@ -1,0 +1,58 @@
+1. ¿Que componentes habéis utilizado en la configuración del agente de Flume?
+
+Apache Flume es una herramienta de software distribuida y open source. Se encarga de recopilar, agregar y mover datos desde diversas fuentes hasta almacenamientos de datos. En el enunciado de la PEC vemos un gráfico que explica el flujo de datos y los componentes de un agente:
+
+• Source: Define el tipo y modo de entrada de los datos. Por ejemplo, desde web.
+• Channel: Define como se comunican los datos a sus destinaciones. Podría ser por
+memoria, por fichero, etc.
+• Sink: Es la destinación final de los datos: hdfs, memoria, spark, etc.
+
+Estos son los tres componentes que debemos definir y que componen el flujo de datos, desde la fuente (source) paasndo por un canal (o varios) y llegando a su destino final, sumidero (sink). En la documentación aportada (https://flume.apache.org/releases/content/1.6.0/FlumeUserGuide.html) también vemos una breve descripción, una fuente externa "envía" eventos a flume en un formato que es capaz de reconocer, es almacenado en un canal (o varios) de forma temporal, hasta que es consumido por un sumidero (sink), y se elimina, este sumidero puede ser un agente más del flujo o el destino final (sumideros de terminales).
+
+2. ¿Que parametros de estos componentes habéis seleccionado?¿Cual es el motivo de vuestra elección y que efecto tienen sus valores en funcionamiento de la aplicación?
+
+En este caso se pide una arquitectura de configuración push, dónde es obligación del agente Flume enviar al proceso Spark los eventos cuando estos estén disponibles. En la guía aportada en la documnetación (https://spark.apache.org/docs/2.2.0/streaming-flume-integration.html) nos dice que spark streaming configura un receptor que actúa como un agente Avro para Flume, al cual Flume puede enviar los datos. Podemos ver en la documentación (https://flume.apache.org/releases/content/1.6.0/FlumeUserGuide.html#flume-sinks) y en este enlace (https://data-flair.training/blogs/flume-sink/) una breve explicación del funcionamiento de un sumidero avro, convierte los eventos en tipo avro y los envía a un par hostname/puerto configurado, estos eventos se agrupan en lotes con un tamaño previamente configurado, es decir, podemos definir el número de eventos que se van a enviar en cada lote (comunicación, por decirlo de una manera). Los parametros seleccionados en la configuración dependen de varios factores, hemos mencionado la fuente de los datos, el almacenamiento temporal que vamos a elegir (channel) y el sumidero que va a consumir dichos datos. En nuestro caso los datos provienen de la API de twitter, para ello existe el tipo "com.cloudera.flume.source.TwitterSource" diseñado para consumir datos de dicha fuente, podemos ver un ejemplo del código fuente aquí "https://github.com/cloudera/cdh-twitter-example/blob/master/flume-sources/src/main/java/com/cloudera/flume/source/TwitterSource.java", en nuestro caso hemos compilado el fichero "TwitterSource.java" aportado en la práctica que define el comportamiento del source. Para la configuración debemos definir un mínimo de parámetros:
+• type: El tipo mencionado y previamente compilado.
+• channels: El canal al que serán enviados los datos y previamente definido en TwitterAgent.channels (en nuestro caso TwitterAgent)
+• consumerKey, consumerSecret, accessToken, accessTokenSecret: Son las credenciales necesarias para conectar una aplicación a la API de twitter y sea reconocible para ellos, teniendo así un control del acceso a los datos que se hace, en el enunciado vemos la configuración y existen diferente niveles de acceso según las necesidades (gratuitas y de pago)
+• keywords: Este parámetro nos permite filtrar las palabras que queremos que aprezcan en los tweets. Lo dejamos en blanco para no tener ningún filtro.
+
+Pueden existir otros parámetros dependiendo del "TwitterSource.java" compilado, en internet he encontrado ejemplos en los que es posible filtrar el idioma del tweet por ejemplo, pero no es nuestro caso, no me extenderé.
+
+En cuanto al canal encontramos en la documentación (https://flume.apache.org/releases/content/1.6.0/FlumeUserGuide.html#flume-channels) diferentes canales y la forma de configurarlos, en nueustro caso queremos que sea en memoria, también vemos que el parámetro mínimo es el tipo en nuestro caso, "memory", pero hay más:
+• byteCapacity: Máximo de bytes en memoria permitidos para el total de eventos almacenados en este canal, esto solo cuenta el cuerpo de los eventos, por eso se puede configurar el parámetyro "byteCapacityBufferPercentage " también, que representa el porcentaje de "byteCapacity" y el tamaño total estimado de todos los eventos, no solo el cuerpo (body), en nuetro caso es un parámetro aportado en el ejercicio.
+• transactionCapacity: El número máximo de eventos que un canal recibirá de una fuente o enviará a un sumidero por transacción.
+• capacity: Número máximo de eventos almacenados en un canal. 
+
+Obviamente el valor de transactionCapacity no puede ser superior a capacity y en nuestro caso enviaremos los tweets de uno en uno, pero he decidido ponerles valor 100 para generar una cola de eventos que se irán guardando en hdfs.
+
+En cuanto al sumidero (sink), en la documentación vemos muchos parámetros posibles, los necesarios son:
+• channel: El canal previamente definido del que obtendrá la información hdfs para guardarla (y se eliminará del canal al obtenerla).
+• type: Existen distintos tipos (no me extenderé en explicar), en nuestro caso "hdfs", ya uqe queremos guardarlo en nuestro directorio hdfs, 
+• hdfs.path: La ubicación en la que se guardará el archivo, también vemos las posibilidades que nos da en la creación de directorios:
+%{host}	Substitute value of event header named “host”. Arbitrary header names are supported.
+%t	Unix time in milliseconds
+%a	locale’s short weekday name (Mon, Tue, ...)
+%A	locale’s full weekday name (Monday, Tuesday, ...)
+%b	locale’s short month name (Jan, Feb, ...)
+%B	locale’s long month name (January, February, ...)
+...
+Elegimos la carpeta que nos piden y los directorios: %Y/%m/%d/%H/, año, mes, día y hora.
+
+He decidido crear dos sinks, uno tipo avro para enviar los eventos a spark streaming y procesarlos, mostrando en pantalla la evolución de los hashtags y otro de tipo hdfs para guardar todos los tweets que se procesan. 
+
+También configuraremos algunos parámetros opcionales, en el caso del sink para guardar los archivos en hdfs:
+• fileType: Los posibles son SequenceFile, DataStream o CompressedStream, elegimos la segunda ya que no queremos archivos comprimidos y nos devolverá objetos DStream.
+• writeFormat: “Text” o “Writable”. El formato para secuencias de registros, en nuestro caso texto. 
+• batchSize: Número de eventos escritos en el archivo antes de que se vacíe en HDFS, no puede ser superior a rollCount (se explica después), obviamente.
+• rollSize: Tamaño del archivo a partir de cual se guardará en HDFS, lo ponemos en cero para que la transferencia no tenga en cuenta el tamaño del archivo, si queremos que no supere cierta cantidad podríamos definirlo.
+• rollCount: Número de eventos guarados en el archivo antes de guardarlo en memoria, si elegimos 1, nos guardará cada tweet en un archivo independiente, es decir, por cada evento genera un archivo. 
+
+En el caso del sink tipo avro me limitaré a configurar los parámetros obligatorios y batch-size:
+• channel: Mismo caso, el canal definido aneteriormente del que obtendrá información, en este caso para spark streaming y procesarla.
+• type: tipo avro para poder enviarlo a un host/puerto definido (hemos explicado al comienzo). 
+• hostname: En nuestro caso localhost, ya que queremos enviarlo a nuestro host, sería posible enviarlo a otro por IP o hostname.
+• port: El puerto dentro del host al que se envía la información, en mi caso 20033.
+• batch-size: El número de eventos que se acumulan para enviar. Lo fijo en 10, ya que el valor por defecto (100), a veces en los 5 segundos que pasan no se llegan a acumular 100 eventos y no se está procesando nada, creo que es mejor poner un valor bajo y que cada 5 segundos se procesen datos, no existan tiempos muertos por decirlo de una manera. Si imprimimos el número de eventos, en mi caso kvs.count().pprint(), vemos que cada 5 segundos no supera los 100 (normalmente), si este valor lo dejamos por defecto hay veces que no se reciben nuevos datos. En cualquier caso no supone un problema si lo dejamos en 100, el tiempo de procesado es suficiente, pero como he dicho, me parece correcto eliminar tiempos muertos. 
+
+Existen muchos parámetros que podemos configurar, en la documentación vemos la explciación de cada uno, para los objetivos del ejercicio he creido conveniente configurar estos, dependiendo de las necesidades u objetivos podría ser conveniente hacer uso de más o distintos valores. No me extenderé en explicarlos todos ya que no creo que sea el objetivo del ejercicio. 
